@@ -164,9 +164,15 @@ local function apply_history(rb, history, start)
 
   for i = start, #history do
     local target = history[i]
-
     if target.weight > 0 then
-      assert(rb:addHost(target.name, target.port, target.weight))
+      local metadata
+      if history[i].upstream then
+        local upstream = get_upstream_by_id(history[i].upstream.id)
+        if upstream and upstream.hostname then
+          metadata = { upstream_hostname = upstream.hostname }
+        end
+      end
+      assert(rb:addHost(target.name, target.port, target.weight, metadata))
     else
       assert(rb:removeHost(target.name, target.port))
     end
@@ -188,14 +194,14 @@ local function populate_healthchecker(hc, balancer)
     if weight > 0 then
       local ipaddr = addr.ip
       local port = addr.port
-      local hostname = host.hostname
+      local hostname = host.metadata and host.metadata.upstream_hostname or host.hostname
       local ok, err = hc:add_target(ipaddr, port, hostname)
       if ok then
         -- Get existing health status which may have been initialized
         -- with data from another worker, and apply to the new balancer.
         local tgt_status = hc:get_target_status(ipaddr, port, hostname)
         if tgt_status ~= nil then
-          balancer:setAddressStatus(tgt_status, ipaddr, port, hostname)
+          balancer:setAddressStatus(tgt_status, ipaddr, port, host.hostname)
         end
 
       else
@@ -227,16 +233,18 @@ do
     -- @param ip string
     -- @param port number
     -- @param hostname string
-    local function ring_balancer_callback(balancer, action, address, ip, port, hostname)
+    local function ring_balancer_callback(balancer, action, address, ip, port, hostname, metadata)
       local healthchecker = healthcheckers[balancer]
+      local custom_hostname = metadata and metadata.upstream_hostname or nil
+
       if action == "added" then
-        local ok, err = healthchecker:add_target(ip, port, hostname)
+        local ok, err = healthchecker:add_target(ip, port, hostname, custom_hostname)
         if not ok then
           log(ERR, "[healthchecks] failed adding a target: ", err)
         end
 
       elseif action == "removed" then
-        local ok, err = healthchecker:remove_target(ip, port, hostname)
+        local ok, err = healthchecker:remove_target(ip, port, custom_hostname or hostname)
         if not ok then
           log(ERR, "[healthchecks] failed removing a target: ", err)
         end
@@ -294,8 +302,17 @@ do
 
       balancer.report_http_status = function(handle, status)
         local ip, port = handle.address.ip, handle.address.port
-        local hostname = handle.address.host and handle.address.host.hostname or nil
-        local _, err = hc:report_http_status(ip, port, hostname, status, "passive")
+        local hostname = nil
+        local custom_hostname = nil
+        if handle.address.host then
+          hostname = handle.address.host.hostname
+          if handle.address.host.metadata and
+             handle.address.host.metadata.upstream_hostname
+          then
+            custom_hostname = handle.address.host.metadata.upstream_hostname
+          end
+        end
+        local _, err = hc:report_http_status(ip, port, hostname, custom_hostname, status, "passive")
         if err then
           log(ERR, "[healthchecks] failed reporting status: ", err)
         end
@@ -303,8 +320,17 @@ do
 
       balancer.report_tcp_failure = function(handle)
         local ip, port = handle.address.ip, handle.address.port
-        local hostname = handle.address.host and handle.address.host.hostname or nil
-        local _, err = hc:report_tcp_failure(ip, port, hostname, nil, "passive")
+        local hostname = nil
+        local custom_hostname = nil
+        if handle.address.host then
+          hostname = handle.address.host.hostname
+          if handle.address.host.metadata and
+             handle.address.host.metadata.upstream_hostname
+          then
+            custom_hostname = handle.address.host.metadata.upstream_hostname
+          end
+        end
+        local _, err = hc:report_tcp_failure(ip, port, hostname, custom_hostname, nil, "passive")
         if err then
           log(ERR, "[healthchecks] failed reporting status: ", err)
         end
@@ -312,8 +338,17 @@ do
 
       balancer.report_timeout = function(handle)
         local ip, port = handle.address.ip, handle.address.port
-        local hostname = handle.address.host and handle.address.host.hostname or nil
-        local _, err = hc:report_timeout(ip, port, hostname, "passive")
+        local hostname = nil
+        local custom_hostname = nil
+        if handle.address.host then
+          hostname = handle.address.host.hostname
+          if handle.address.host.metadata and
+             handle.address.host.metadata.upstream_hostname
+          then
+            custom_hostname = handle.address.host.metadata.upstream_hostname
+          end
+        end
+        local _, err = hc:report_timeout(ip, port, hostname, custom_hostname, "passive")
         if err then
           log(ERR, "[healthchecks] failed reporting status: ", err)
         end
@@ -868,7 +903,11 @@ local function execute(target, ctx)
 
   target.ip = ip
   target.port = port
-  target.hostname = hostname
+  if upstream and upstream.hostname ~= nil then
+    target.hostname = upstream.hostname
+  else
+    target.hostname = hostname
+  end
   return true
 end
 
@@ -1014,6 +1053,7 @@ return {
   subscribe_to_healthcheck_events = subscribe_to_healthcheck_events,
   unsubscribe_from_healthcheck_events = unsubscribe_from_healthcheck_events,
   get_upstream_health = get_upstream_health,
+  get_upstream_by_id = get_upstream_by_id,
 
   -- ones below are exported for test purposes only
   _create_balancer = create_balancer,

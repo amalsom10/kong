@@ -1237,10 +1237,16 @@ function _M.new(routes)
     req_method = upper(req_method)
 
     if req_host ~= "" then
-      -- strip port number if given because matching ignores ports
+      -- strip default port number
+      -- TODO: only strip on appropriate protocol
+--      ctx.req_host = utils.strip_right(utils.strip_right(req_host, ':80'), ':443')
+--      -- strip port number if given because matching ignores ports
       local idx = find(req_host, ":", 2, true)
       if idx then
-        ctx.req_host = sub(req_host, 1, idx - 1)
+        local port = tonumber(req_host:sub(idx+1))
+        if port == 80 or port == 443 then
+          ctx.req_host = sub(req_host, 1, idx - 1)
+        end
       end
     end
 

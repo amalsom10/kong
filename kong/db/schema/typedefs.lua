@@ -20,15 +20,17 @@ local type = type
 
 local function validate_host(host)
   local res, err_or_port = utils.normalize_ip(host)
-  if type(err_or_port) == "string" and err_or_port ~= "invalid port number" then
-    return nil, "invalid value: " .. host
-  end
+--  if type(err_or_port) == "string" and err_or_port ~= "invalid port number" then
+--    return nil, "invalid value: " .. host
+--  end
 
-  if err_or_port == "invalid port number" or type(res.port) == "number" then
-    return nil, "must not have a port"
-  end
+  return res and true or false, err_or_port
+--
+--  if err_or_port == "invalid port number" or type(res.port) == "number" then
+--    return nil, "must not have a port"
+--  end
 
-  return true
+--  return true
 end
 
 
